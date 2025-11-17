@@ -316,13 +316,10 @@ func (f *Facade) Exists(
     {{.Camel }} {{.Type}},
 {{- end }}
 ) bool {
-	query := fmt.Sprintf(
-		"SELECT 1 FROM %s WHERE {{range $i, $pk := .PrimaryKeys}}{{if $i}} AND {{end}}{{$pk.Snake}} = ${{add $i 1}}{{end}} LIMIT 1",
-		Table,
-	)
+	query := "SELECT 1 FROM " + Table + " WHERE {{.ID}} = $1 LIMIT 1"
 
 	var exists int
-	err := f.db.QueryRow(ctx, query, {{range .PrimaryKeys}}{{.Camel}}, {{end}}).Scan(&exists)
+	err := f.db.QueryRow(ctx, query, {{.ID}}).Scan(&exists)
 	return err == nil
 }
 
@@ -333,13 +330,10 @@ func (f *Facade) ExistsTx(
     {{.Camel }} {{.Type}},
 {{- end }}
 ) bool {
-	query := fmt.Sprintf(
-		"SELECT 1 FROM %s WHERE {{range $i, $pk := .PrimaryKeys}}{{if $i}} AND {{end}}{{$pk.Snake}} = ${{add $i 1}}{{end}} LIMIT 1",
-		Table,
-	)
+	query := "SELECT 1 FROM " + Table + " WHERE {{.ID}} = $1 LIMIT 1"
 
 	var exists int
-	err := tx.QueryRow(ctx, query, {{range .PrimaryKeys}}{{.Camel}}, {{end}}).Scan(&exists)
+	err := tx.QueryRow(ctx, query, {{.ID}}).Scan(&exists)
 	return err == nil
 }
 
@@ -2847,25 +2841,16 @@ var oldTemplateStringSecondaryIndexAddOn = `
 var templateModelString = `package {{.PackageName}}
 
 import (
-	"cloud.google.com/go/spanner"
+	"context"
+	"fmt"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"{{.ProjectName}}/smartlg/logger"
 	"{{.ModuleName}}/m_options"
 )
 
 
-var (
-	defaultConfig = spanner.ClientConfig{
-		SessionPoolConfig: spanner.SessionPoolConfig{
-			MinOpened:          100,
-			MaxOpened:          2000,
-			MaxIdle:            200,
-			HealthCheckWorkers: 10,
-		},
-	}
-)
-
 type Model struct {
-	DB *spanner.Client
+	DB *pgxpool.Pool
 	//
 	{{- range .Tables }}
 	{{ .TableName }} *{{ .PackageName }}.Facade
@@ -2873,27 +2858,40 @@ type Model struct {
 }
 
 type Options struct {
-	SpannerUrl string
+	PostgresURL string
 	Log *logger.Logger
 }
 
 func New(ctx context.Context, o *Options) (*Model, error) {
-	db, err := spanner.NewClientWithConfig(ctx, o.SpannerUrl, defaultConfig)
+	// Parse config
+	config, err := pgxpool.ParseConfig(o.PostgresURL)
 	if err != nil {
-	    o.Log.Error("Failed to create spanner client", logger.H{"error": err})
-		return nil, fmt.Errorf("failed to create spanner client: %w", err)
+		o.Log.Error("Failed to parse PostgreSQL config", logger.H{"error": err})
+		return nil, fmt.Errorf("failed to parse PostgreSQL config: %w", err)
 	}
 
+	// Set connection pool settings
+	config.MinConns = 10
+	config.MaxConns = 100
+
+	// Create connection pool
+	db, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		o.Log.Error("Failed to create PostgreSQL connection pool", logger.H{"error": err})
+		return nil, fmt.Errorf("failed to create PostgreSQL connection pool: %w", err)
+	}
+
+	// Test connection
 	if err := ping(ctx, db); err != nil {
-		o.Log.Error("[PKG DB] Failed to ping spanner.", map[string]any{
+		o.Log.Error("[PKG DB] Failed to ping PostgreSQL.", map[string]any{
 			"error": err,
 		})
-		return nil, fmt.Errorf("failed to ping spanner: %w", err)
+		return nil, fmt.Errorf("failed to ping PostgreSQL: %w", err)
 	}
 
 	opt := &m_options.Options{
-		Log:   o.Log,
-		DB:    db,
+		Log: o.Log,
+		DB:  db,
 	}
 
 	return &Model{
@@ -2905,22 +2903,24 @@ func New(ctx context.Context, o *Options) (*Model, error) {
 	}, nil
 }
 
-func ping(ctx context.Context, db *spanner.Client) error {
-	query := spanner.Statement{SQL: "SELECT 1"}
+func ping(ctx context.Context, db *pgxpool.Pool) error {
+	var testResult int
+	err := db.QueryRow(ctx, "SELECT 1").Scan(&testResult)
+	if err != nil {
+		return fmt.Errorf("failed to ping PostgreSQL: %w", err)
+	}
 
-	iter := db.Single().Query(ctx, query)
-	defer iter.Stop()
-	var testResult int64
-	if err := iter.Do(func(r *spanner.Row) error {
-		if r.Column(0, &testResult); testResult != 1 {
-			return fmt.Errorf("failed to ping spanner")
-		}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("failed to ping spanner: %w", err)
+	if testResult != 1 {
+		return fmt.Errorf("unexpected ping result: %d", testResult)
 	}
 
 	return nil
+}
+
+func (m *Model) Close() {
+	if m.DB != nil {
+		m.DB.Close()
+	}
 }
 `
 var templateOptionsString = `package m_options
@@ -2928,13 +2928,13 @@ var templateOptionsString = `package m_options
 import (
 	"fmt"
 
-	"cloud.google.com/go/spanner"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"{{.ProjectName}}/log/logger"
 )
 
 type Options struct {
-	Log   *logger.Logger
-	DB    *spanner.Client
+	Log *logger.Logger
+	DB  *pgxpool.Pool
 }
 
 func (o Options) IsValid() error {

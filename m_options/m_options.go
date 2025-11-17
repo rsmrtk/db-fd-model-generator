@@ -3,13 +3,13 @@ package m_options
 import (
 	"fmt"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/rsmrtk/db-fd-model-generator/logger"
+	"cloud.google.com/go/spanner"
+	"github.com/rsmrtk/log/logger"
 )
 
 type Options struct {
 	Log *logger.Logger
-	DB  *pgxpool.Pool
+	DB  *spanner.Client
 }
 
 func (o Options) IsValid() error {
