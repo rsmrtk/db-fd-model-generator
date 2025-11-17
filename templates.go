@@ -2848,7 +2848,7 @@ var templateModelString = `package {{.PackageName}}
 
 import (
 	"cloud.google.com/go/spanner"
-	"{{.ProjectName}}/log/logger"
+	"{{.ProjectName}}/smartlg/logger"
 	"{{.ModuleName}}/m_options"
 )
 
