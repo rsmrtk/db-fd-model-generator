@@ -58,20 +58,12 @@ func main() {
 
 	eg := errgroup.Group{}
 
+	// Always use PostgreSQL templates
 	templates := [4]string{
-		oldTemplateString + newTemplateString,
-		oldTemplateStringMoreThanOnePKAddOn + newTemplateStringMoreThanOnePKAddOn,
-		oldTemplateStringMoreThanTwoPKAddOn + newTemplateStringMoreThanTwoPKAddOn,
-		oldTemplateStringSecondaryIndexAddOn + newTemplateStringSecondaryIndexAddOn,
-	}
-
-	if a.NewTemplate {
-		templates = [4]string{
-			newTemplateString,
-			newTemplateStringMoreThanOnePKAddOn,
-			newTemplateStringMoreThanTwoPKAddOn,
-			newTemplateStringSecondaryIndexAddOn,
-		}
+		newTemplateString,
+		newTemplateStringMoreThanOnePKAddOn,
+		newTemplateStringMoreThanTwoPKAddOn,
+		newTemplateStringSecondaryIndexAddOn,
 	}
 
 	for _, s := range scan {

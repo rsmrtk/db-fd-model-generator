@@ -2,11 +2,11 @@
 
 ## Overview
 
-`db-model-generator` is a tool that automatically generates Go models and methods for interacting with Google Cloud Spanner databases based on SQL Spanner table definitions. It scans `.sql` schema files and generates Go code with essential database operations.
+`db-model-generator` is a tool that automatically generates Go models and methods for interacting with PostgreSQL databases based on SQL table definitions. It scans `.sql` schema files and generates Go code with essential database operations using the pgx/v5 driver.
 
 ### Supported Operations
 
-For each Spanner table, the following methods are generated:
+For each PostgreSQL table, the following methods are generated:
 
 - `Create`: Insert a new record into the table.
 - `CreateMut`: Batch insert records into the table.
@@ -38,8 +38,10 @@ For each Spanner table, the following methods are generated:
 
 ### Features
 
-- **Automatic Code Generation**: Reads `.sql` files to generate Go models with essential operations.
+- **Automatic Code Generation**: Reads `.sql` files to generate Go models with essential operations for PostgreSQL.
 - **CRUD + Mutations**: Supports basic CRUD operations and batch mutations.
+- **PostgreSQL Native**: Uses pgx/v5 driver for optimal PostgreSQL performance.
+- **Type Support**: Full support for PostgreSQL types including UUID, JSONB, arrays, and custom types.
 - **Customizable**: Easily extendable to support additional methods.
 - **One SQL file per folder**: Each folder should contain only one SQL file. Having multiple files may cause errors.
 - **If you add the `-c` flag**: You can place a .sql file in the root of the project, and the files will be created automatically.

@@ -7,12 +7,16 @@ import (
 	"github.com/fatih/color"
 )
 
+// H is a shorthand for map[string]interface{}
+type H map[string]interface{}
+
 type Logger interface {
 	Printf(format string, v ...interface{})
 	Println(v ...interface{})
 	Fatalln(v ...interface{})
 	Errorln(v ...interface{})
 	Warningln(v ...interface{})
+	Error(msg string, fields H)
 }
 
 type logger struct {
@@ -48,6 +52,10 @@ func (l *logger) Errorln(v ...interface{}) {
 
 func (l *logger) Warningln(v ...interface{}) {
 	l.lgr.Println(l.byellow("WARN"), l.hiWhite(v...))
+}
+
+func (l *logger) Error(msg string, fields H) {
+	l.lgr.Printf("%s %s %v", l.bred("ERR"), l.hiWhite(msg), fields)
 }
 
 func New() Logger {

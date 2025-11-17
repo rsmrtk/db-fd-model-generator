@@ -214,21 +214,16 @@ func ConstructWhereClause(queryParams []QueryParam) (whereClause string, params 
 	whereClauses := make([]string, len(queryParams))
 	params =  make(map[string]interface{}, len(queryParams))
 	builder := strings.Builder{}
+	paramIndex := 1
 	for i, qp := range queryParams {
 	if (qp.Operator == OpIs || qp.Operator == OpIsNot) && qp.Value == nil {
         whereClauses[i] = fmt.Sprintf("%s %s NULL", qp.Field, qp.Operator)
         continue
     }
-	builder.WriteString("param")
-		builder.WriteString(strconv.Itoa(i))
-		paramName := builder.String()
-		builder.Reset()
-
-		// Construct param
-		builder.WriteString("@")
-		builder.WriteString(paramName)
-		param := builder.String()
-		builder.Reset()
+	// Use PostgreSQL positional placeholder $N
+		paramName := "param" + strconv.Itoa(paramIndex-1)
+		param := "$" + strconv.Itoa(paramIndex)
+		paramIndex++
 
 		if qp.Operator == "IN" {
 			builder.WriteString("UNNEST(")
@@ -3005,25 +3000,21 @@ func New[FieldType ~string](initial string) *Builder[FieldType] {
 	
 // writeColumnTo is an internal helper to write a column name (quoted) to a string builder.
 func (b *Builder[FieldType]) writeColumnTo(sb *strings.Builder, col FieldType) {
-	sb.WriteString("` + "`" + `")
+	sb.WriteString("\"")
 	sb.WriteString(string(col))
-	sb.WriteString("` + "`" + `")
+	sb.WriteString("\"")
 }
 
 // addParam is an internal helper to add a parameter to the query and return its placeholder name.
 func (b *Builder[FieldType]) addParam(value any) string {
-	b.paramWriter.WriteString("param")
-	b.paramWriter.WriteString(strconv.Itoa(len(b.params)))
-	paramKey := b.paramWriter.String()
-	b.paramWriter.Reset() // Reset for next param name generation
-
-	b.paramWriter.WriteString("@")
-	b.paramWriter.WriteString(paramKey)
-	paramName := b.paramWriter.String()
-	b.paramWriter.Reset() // Reset after generating full placeholder
+	// PostgreSQL uses $1, $2, $3... format for positional parameters
+	paramIndex := len(b.params) + 1
+	paramKey := "param" + strconv.Itoa(paramIndex-1)
 
 	b.params[paramKey] = value
-	return paramName
+
+	// Return PostgreSQL-style positional placeholder
+	return "$" + strconv.Itoa(paramIndex)
 }
 
 // Select starts or replaces the SELECT clause.
@@ -3135,14 +3126,14 @@ func (b *Builder[FieldType]) OrUpper(col FieldType) *AfterWhere[FieldType] {
 	return b.afterWhere
 }
 
-// Eq adds an "= @param" condition to the WHERE clause.
+// Eq adds an "= $N" condition to the WHERE clause (PostgreSQL format).
 func (b *AfterWhere[FieldType]) Eq(value any) *Builder[FieldType] {
 	b.whereClause.WriteString(" = ")
 	b.whereClause.WriteString(b.addParam(value))
 	return b.Builder
 }
 
-// Is adds an "IS @param" condition to the WHERE clause.
+// Is adds an "IS $N" condition to the WHERE clause (PostgreSQL format).
 func (b *AfterWhere[FieldType]) Is(value any) *Builder[FieldType] {
 	b.whereClause.WriteString(" IS ")
 	b.whereClause.WriteString(b.addParam(value))
@@ -3168,14 +3159,14 @@ func (b *Builder[FieldType]) Or(col FieldType) *AfterWhere[FieldType] {
 	return b.afterWhere
 }
 
-// NotEqual adds a "!= @param" condition to the WHERE clause.
+// NotEqual adds a "!= $N" condition to the WHERE clause (PostgreSQL format).
 func (b *AfterWhere[FieldType]) NotEqual(value any) *Builder[FieldType] {
 	b.whereClause.WriteString(" != ")
 	b.whereClause.WriteString(b.addParam(value))
 	return b.Builder
 }
 
-// Unnest adds an "IN UNNEST(@param)" condition to the WHERE clause.
+// Unnest adds an "IN UNNEST($N)" condition to the WHERE clause.
 func (b *AfterWhere[FieldType]) Unnest(values any) *Builder[FieldType] {
 	b.whereClause.WriteString(" IN UNNEST(")
 	b.whereClause.WriteString(b.addParam(values))
@@ -3183,7 +3174,7 @@ func (b *AfterWhere[FieldType]) Unnest(values any) *Builder[FieldType] {
 	return b.Builder
 }
 
-// In adds an "IN (@param1, @param2, ...)" condition to the WHERE clause.
+// In adds an "IN ($N1, $N2, ...)" condition to the WHERE clause.
 func (b *AfterWhere[FieldType]) In(values ...any) *Builder[FieldType] {
 	if len(values) == 0 {
 		return b.Builder // Or handle error: IN clause requires at least one value
@@ -3200,42 +3191,42 @@ func (b *AfterWhere[FieldType]) In(values ...any) *Builder[FieldType] {
 	return b.Builder
 }
 
-// LessThan adds a "< @param" condition to the WHERE clause.
+// LessThan adds a "< $N" condition to the WHERE clause.
 func (b *AfterWhere[FieldType]) LessThan(value any) *Builder[FieldType] {
 	b.whereClause.WriteString(" < ")
 	b.whereClause.WriteString(b.addParam(value))
 	return b.Builder
 }
 
-// GrThan adds a "> @param" condition to the WHERE clause.
+// GrThan adds a "> $N" condition to the WHERE clause.
 func (b *AfterWhere[FieldType]) GrThan(value any) *Builder[FieldType] {
 	b.whereClause.WriteString(" > ")
 	b.whereClause.WriteString(b.addParam(value))
 	return b.Builder
 }
 
-// LessThanOrEq adds a "<= @param" condition to the WHERE clause.
+// LessThanOrEq adds a "<= $N" condition to the WHERE clause.
 func (b *AfterWhere[FieldType]) LessThanOrEq(value any) *Builder[FieldType] {
 	b.whereClause.WriteString(" <= ")
 	b.whereClause.WriteString(b.addParam(value))
 	return b.Builder
 }
 
-// GrThanOrEq adds a ">= @param" condition to the WHERE clause.
+// GrThanOrEq adds a ">= $N" condition to the WHERE clause.
 func (b *AfterWhere[FieldType]) GrThanOrEq(value any) *Builder[FieldType] {
 	b.whereClause.WriteString(" >= ")
 	b.whereClause.WriteString(b.addParam(value))
 	return b.Builder
 }
 
-// Like adds a "LIKE @param" condition to the WHERE clause.
+// Like adds a "LIKE $N" condition to the WHERE clause.
 func (b *AfterWhere[FieldType]) Like(pattern any) *Builder[FieldType] {
 	b.whereClause.WriteString(" LIKE ")
 	b.whereClause.WriteString(b.addParam(pattern))
 	return b.Builder
 }
 
-// LikeLower adds a "LIKE LOWER(@param)" condition to the WHERE clause.
+// LikeLower adds a "LIKE LOWER($N)" condition to the WHERE clause.
 // This implies the column being compared should also be LOWERed, e.g., WhereLower(col).LikeLower(pattern)
 func (b *AfterWhere[FieldType]) LikeLower(pattern any) *Builder[FieldType] {
 	wc := b.whereClause
@@ -3245,7 +3236,7 @@ func (b *AfterWhere[FieldType]) LikeLower(pattern any) *Builder[FieldType] {
 	return b.Builder
 }
 
-// Between adds a "BETWEEN @param1 AND @param2" condition to the WHERE clause.
+// Between adds a "BETWEEN $N1 AND $N2" condition to the WHERE clause.
 func (b *AfterWhere[FieldType]) Between(val1 any, val2 any) *Builder[FieldType] {
 	wc := b.whereClause
 	wc.WriteString(" BETWEEN ")
