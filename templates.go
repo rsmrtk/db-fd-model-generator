@@ -3,7 +3,13 @@ package main
 var mainTemplateString = `package {{.PackageName}}
 
 import (
-	"cloud.google.com/go/spanner"
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"strings"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
     "{{.ModuleName}}/m_options"
 	"{{.ModuleName}}/sql_builder"
     "{{.ProjectName}}/log/logger"
@@ -21,7 +27,7 @@ const (
 
 type Facade struct {
 	log *logger.Logger
-	db  *spanner.Client
+	db  *pgxpool.Pool
 	//
 	{{- range .Childs}}
 	{{.Camel}} *{{.PackageName}}.Facade
@@ -96,7 +102,16 @@ func GetAllFields() []Field {
    }
 }
 
-var allFieldsList = GetAllFields() 
+var allFieldsList = GetAllFields()
+
+// Helper function to generate PostgreSQL placeholders ($1, $2, ...)
+func generatePlaceholders(n int) string {
+	placeholders := make([]string, n)
+	for i := 0; i < n; i++ {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+	}
+	return strings.Join(placeholders, ", ")
+}
 
 func (f Field) String() string {
     return string(f)
@@ -243,22 +258,20 @@ func ConstructWhereClause(queryParams []QueryParam) (whereClause string, params 
 
 var oldTemplateString = `
 
-func (f *Facade) CreateMut(data *Data) *spanner.Mutation {
-    return spanner.Insert(Table, GetColumns(), GetValues(data))
-}
+func (f *Facade) Create(ctx context.Context, data *Data) error {
+	columns := GetColumns()
+	values := GetValues(data)
 
-func (f *Facade) CreateOrUpdateMut(data *Data) *spanner.Mutation {
-	return spanner.InsertOrUpdate(Table, GetColumns(), GetValues(data))
-}
+	query := fmt.Sprintf(
+		"INSERT INTO %s (%s) VALUES (%s)",
+		Table,
+		strings.Join(columns, ", "),
+		generatePlaceholders(len(columns)),
+	)
 
-func (f *Facade) CreateOrUpdate(
-	ctx context.Context,
-	data *Data,
-) error {
-	mutation := f.CreateOrUpdateMut(data)
-
-	if _, err := f.db.Apply(ctx, []*spanner.Mutation{mutation}); err != nil {
-		f.logError("CreateOrUpdate", "Failed to Apply", logger.H{
+	_, err := f.db.Exec(ctx, query, values...)
+	if err != nil {
+		f.logError("Create", "Failed to insert", logger.H{
 			"error": err,
 			"data":  data,
 		})
@@ -268,12 +281,26 @@ func (f *Facade) CreateOrUpdate(
 	return nil
 }
 
+func (f *Facade) CreateOrUpdate(ctx context.Context, data *Data) error {
+	columns := GetColumns()
+	values := GetValues(data)
 
-func (f *Facade) Create(ctx context.Context, data *Data) error {
-	mutation := f.CreateMut(data)
+	updateCols := make([]string, 0, len(columns))
+	for _, col := range columns {
+		updateCols = append(updateCols, fmt.Sprintf("%s = EXCLUDED.%s", col, col))
+	}
 
-	if _, err := f.db.Apply(ctx, []*spanner.Mutation{mutation}); err != nil {
-		f.logError("Create", "Failed to Apply", logger.H{
+	query := fmt.Sprintf(
+		"INSERT INTO %s (%s) VALUES (%s) ON CONFLICT ({{range $i, $pk := .PrimaryKeys}}{{if $i}}, {{end}}{{$pk.Snake}}{{end}}) DO UPDATE SET %s",
+		Table,
+		strings.Join(columns, ", "),
+		generatePlaceholders(len(columns)),
+		strings.Join(updateCols, ", "),
+	)
+
+	_, err := f.db.Exec(ctx, query, values...)
+	if err != nil {
+		f.logError("CreateOrUpdate", "Failed to upsert", logger.H{
 			"error": err,
 			"data":  data,
 		})
@@ -284,42 +311,36 @@ func (f *Facade) Create(ctx context.Context, data *Data) error {
 }
 
 func (f *Facade) Exists(
-    ctx context.Context, 
+    ctx context.Context,
 {{- range .PrimaryKeys }}
     {{.Camel }} {{.Type}},
 {{- end }}
 ) bool {
-	_, err := f.db.Single().ReadRow(
-		ctx,
+	query := fmt.Sprintf(
+		"SELECT 1 FROM %s WHERE {{range $i, $pk := .PrimaryKeys}}{{if $i}} AND {{end}}{{$pk.Snake}} = ${{add $i 1}}{{end}} LIMIT 1",
 		Table,
-		spanner.Key{
-			{{- range .PrimaryKeys }}
-			{{ .Camel}},
-			{{- end }}
-		},
-		[]string{string(ID)},
 	)
+
+	var exists int
+	err := f.db.QueryRow(ctx, query, {{range .PrimaryKeys}}{{.Camel}}, {{end}}).Scan(&exists)
 	return err == nil
 }
 
-func (f *Facade) ExistsRtx(
+func (f *Facade) ExistsTx(
 	ctx context.Context,
-	tx *spanner.ReadOnlyTransaction,
+	tx pgx.Tx,
 {{- range .PrimaryKeys }}
     {{.Camel }} {{.Type}},
 {{- end }}
 ) bool {
-    _, err := tx.ReadRow(
-        ctx,
-        Table,
-        spanner.Key{
-            {{- range .PrimaryKeys }}
-            {{ .Camel }},
-            {{- end }}
-        },
-        []string{string(ID)},
-    )
-    return err == nil
+	query := fmt.Sprintf(
+		"SELECT 1 FROM %s WHERE {{range $i, $pk := .PrimaryKeys}}{{if $i}} AND {{end}}{{$pk.Snake}} = ${{add $i 1}}{{end}} LIMIT 1",
+		Table,
+	)
+
+	var exists int
+	err := tx.QueryRow(ctx, query, {{range .PrimaryKeys}}{{.Camel}}, {{end}}).Scan(&exists)
+	return err == nil
 }
 
 func (f *Facade) Get(
@@ -334,41 +355,48 @@ func (f *Facade) Get(
 		queryString += " WHERE " + whereClauses
 	}
 
-	stmt := spanner.Statement{
-		SQL:    queryString,
-		Params: params,
+	// Convert params map to array for PostgreSQL
+	paramValues := make([]interface{}, 0, len(params))
+	for _, v := range params {
+		paramValues = append(paramValues, v)
 	}
 
-	iter := f.db.Single().Query(ctx, stmt)
-	defer iter.Stop()
+	rows, err := f.db.Query(ctx, queryString, paramValues...)
+	if err != nil {
+		f.logError("Get", "Failed to query", logger.H{
+			"error":        err,
+			"query_params": queryParams,
+			"fields":       fields,
+		})
+		return nil, err
+	}
+	defer rows.Close()
 
-	res := make([]*Data, 0, iter.RowCount)
+	res := make([]*Data, 0)
 
-	if err := iter.Do(func(row *spanner.Row) error {
+	for rows.Next() {
 		var data Data
-
-		if err := row.Columns(data.fieldPtrs(fields)...); err != nil {
+		if err := rows.Scan(data.fieldPtrs(fields)...); err != nil {
 			f.logError("Get", "Failed to Scan", logger.H{
 				"error":        err,
 				"query_params": queryParams,
 				"fields":       fields,
 			})
-			return err
+			return nil, err
 		}
-
 		res = append(res, &data)
+	}
 
-		return nil
-	}); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 
 	return res, nil
 }
 
-func (f *Facade) GetRtx(
+func (f *Facade) GetTx(
 	ctx context.Context,
-	rtx *spanner.ReadOnlyTransaction,
+	tx pgx.Tx,
 	queryParams []QueryParam,
 	fields []Field,
 ) ([]*Data, error) {
@@ -379,31 +407,39 @@ func (f *Facade) GetRtx(
 		queryString += " WHERE " + whereClauses
 	}
 
-	stmt := spanner.Statement{
-		SQL:    queryString,
-		Params: params,
+	// Convert params map to array for PostgreSQL
+	paramValues := make([]interface{}, 0, len(params))
+	for _, v := range params {
+		paramValues = append(paramValues, v)
 	}
-	iter := rtx.Query(ctx, stmt)
-	defer iter.Stop()
 
-	res := make([]*Data, 0, iter.RowCount)
+	rows, err := tx.Query(ctx, queryString, paramValues...)
+	if err != nil {
+		f.logError("GetTx", "Failed to query", logger.H{
+			"error":        err,
+			"query_params": queryParams,
+			"fields":       fields,
+		})
+		return nil, err
+	}
+	defer rows.Close()
 
-	if err := iter.Do(func(row *spanner.Row) error {
+	res := make([]*Data, 0)
+
+	for rows.Next() {
 		var data Data
-
-		if err := row.Columns(data.fieldPtrs(fields)...); err != nil {
-			f.logError("Get", "Failed to Scan", logger.H{
+		if err := rows.Scan(data.fieldPtrs(fields)...); err != nil {
+			f.logError("GetTx", "Failed to Scan", logger.H{
 				"error":        err,
 				"query_params": queryParams,
 				"fields":       fields,
 			})
-			return err
+			return nil, err
 		}
-
 		res = append(res, &data)
+	}
 
-		return nil
-	}); err != nil {
+	if err = rows.Err(); err != nil {
 		return nil, err
 	}
 

@@ -86,41 +86,67 @@ type ScanData struct {
 	CountPrimaryKeys int
 }
 
-var spannerTypeMapping = map[string]string{
-	"INT64 NOT NULL":     "int64",
-	"STRING NOT NULL":    "string",
-	"TIMESTAMP NOT NULL": "time.Time",
-	"DATE NOT NULL":      "civil.Date",
-	"BOOL NOT NULL":      "bool",
-	"FLOAT64 NOT NULL":   "float64",
-	"NUMERIC NOT NULL":   "big.Rat",
-	"INT64":              "spanner.NullInt64",
-	"STRING":             "spanner.NullString",
-	"BYTES":              "[]byte",
-	"BYTES NOT NULL":     "[]byte",
-	"TIMESTAMP":          "spanner.NullTime",
-	"BOOL":               "spanner.NullBool",
-	"FLOAT64":            "spanner.NullFloat64",
-	"DATE":               "spanner.NullDate",
-	"FLOAT32":            "spanner.NullFloat32",
-	"JSON NOT NULL":      "spanner.NullJSON",
-	"JSON":               "spanner.NullJSON",
-	"NUMERIC":            "spanner.NullNumeric",
-	"STRUCT":             "interface{}",
-	// "TOKENLIST":          "[]string",
+var postgresTypeMapping = map[string]string{
+	// PostgreSQL types to Go types - NOT NULL variants
+	"BIGINT NOT NULL":        "int64",
+	"INTEGER NOT NULL":       "int32",
+	"SMALLINT NOT NULL":      "int16",
+	"TEXT NOT NULL":          "string",
+	"VARCHAR NOT NULL":       "string",
+	"CHAR NOT NULL":          "string",
+	"TIMESTAMP NOT NULL":     "time.Time",
+	"TIMESTAMPTZ NOT NULL":   "time.Time",
+	"DATE NOT NULL":          "time.Time",
+	"TIME NOT NULL":          "time.Time",
+	"BOOLEAN NOT NULL":       "bool",
+	"DOUBLE PRECISION NOT NULL": "float64",
+	"REAL NOT NULL":          "float32",
+	"NUMERIC NOT NULL":       "string", // Use string for precision
+	"DECIMAL NOT NULL":       "string",
+	"UUID NOT NULL":          "string",
+	"BYTEA NOT NULL":         "[]byte",
+	"JSONB NOT NULL":         "json.RawMessage",
+	"JSON NOT NULL":          "json.RawMessage",
+
+	// Nullable variants using database/sql types
+	"BIGINT":                 "sql.NullInt64",
+	"INTEGER":                "sql.NullInt32",
+	"SMALLINT":               "sql.NullInt16",
+	"TEXT":                   "sql.NullString",
+	"VARCHAR":                "sql.NullString",
+	"CHAR":                   "sql.NullString",
+	"TIMESTAMP":              "sql.NullTime",
+	"TIMESTAMPTZ":            "sql.NullTime",
+	"DATE":                   "sql.NullTime",
+	"TIME":                   "sql.NullTime",
+	"BOOLEAN":                "sql.NullBool",
+	"DOUBLE PRECISION":       "sql.NullFloat64",
+	"REAL":                   "sql.NullFloat64",
+	"NUMERIC":                "sql.NullString",
+	"DECIMAL":                "sql.NullString",
+	"UUID":                   "sql.NullString",
+	"BYTEA":                  "[]byte",
+	"JSONB":                  "json.RawMessage",
+	"JSON":                   "json.RawMessage",
 }
 
-var spannerArrTypeMapping = map[string]string{
+var postgresArrTypeMapping = map[string]string{
 	"ARRAY":     "[]",
-	"INT64":     "int64",
-	"STRING":    "string",
-	"BYTES":     "[]byte",
-	"BOOL":      "bool",
-	"FLOAT64":   "float64",
+	"BIGINT":    "int64",
+	"INTEGER":   "int32",
+	"SMALLINT":  "int16",
+	"TEXT":      "string",
+	"VARCHAR":   "string",
+	"BYTEA":     "[]byte",
+	"BOOLEAN":   "bool",
+	"DOUBLE PRECISION": "float64",
+	"REAL":      "float32",
 	"TIMESTAMP": "time.Time",
-	"DATE":      "civil.Date",
-	"NUMERIC":   "big.Rat",
-	"JSON":      "spanner.NullJSON",
+	"DATE":      "time.Time",
+	"NUMERIC":   "string",
+	"UUID":      "string",
+	"JSONB":     "json.RawMessage",
+	"JSON":      "json.RawMessage",
 }
 
 type SCAN struct {
@@ -239,7 +265,7 @@ func parceArray(s string) string {
 				break
 			}
 		}
-		t, ok := spannerArrTypeMapping[strings.ToUpper(a)]
+		t, ok := postgresArrTypeMapping[strings.ToUpper(a)]
 		if !ok {
 			goType = "interface{}" // Default to interface{} if unknown type
 		} else {
@@ -294,7 +320,7 @@ func (st *StructTemplateData) columns(line string) bool {
 		if strings.Contains(sqlType, "ARRAY") {
 			goType = parceArray(sqlType)
 		} else {
-			t, ok := spannerTypeMapping[strings.ToUpper(sqlType)]
+			t, ok := postgresTypeMapping[strings.ToUpper(sqlType)]
 			if !ok {
 				goType = "interface{}" // Default to interface{} if unknown type
 			} else {
